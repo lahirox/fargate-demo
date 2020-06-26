@@ -9,139 +9,385 @@ orbs:
 
 jobs:
   deploy-service-update:
-    description: Update an ECS service.
-    usage:
-      version: 2.1
-
-      orbs:
-        aws-ecr: circleci/aws-ecr@6.5.0
-        aws-ecs: circleci/aws-ecs@0.0.10
-
-      workflows:
-        build-and-deploy:
-          jobs:
-            - aws-ecr/build-and-push-image:
-                account-url: AWS_ECR_ACCOUNT_URL
-                repo: "${MY_APP_PREFIX}"
-                region: AWS_REGION
-                tag: "${CIRCLE_SHA1}"
-            - aws-ecs/deploy-service-update:
-                requires:
-                  - aws-ecr/build-and-push-image
-                family: "${MY_APP_PREFIX}-service"
-                cluster-name: "${MY_APP_PREFIX}-cluster"
-                container-image-name-updates: "container=${MY_APP_PREFIX}-service,tag=${CIRCLE_SHA1}"
-
+    docker:
+      - image: << parameters.docker-image-for-job >>
+    parameters:
+      docker-image-for-job:
+        description:
+          "The docker image to be used for running this job on CircleCI."
+        type: string
+        default: circleci/python:3.7.1
+      aws-access-key-id:
+        description: |
+          AWS access key id for IAM role. Defaulted to $AWS_ACCESS_KEY_ID
+        type: string
+        default: $AWS_ACCESS_KEY_ID
+      aws-secret-access-key:
+        description: |
+          AWS secret key for IAM role. Defaulted to $AWS_SECRET_ACCESS_KEY
+        type: string
+        default: $AWS_SECRET_ACCESS_KEY
+      aws-region:
+        description:
+          AWS region to operate in. Defaulted to $AWS_REGION
+        type: string
+        default: $AWS_REGION
+      family:
+        description:
+          "Name of the task definition's family."
+        type: string
+      cluster-name:
+        description:
+          "The short name or full ARN of the cluster that hosts the service."
+        type: string
+      service-name:
+        description:
+          "The name of the service to update. If undefined, we assume `family` is the name of both the service and task definition."
+        type: string
+        default: ""
+      deployment-controller:
+        description:
+          "The deployment controller to use for the service. Defaulted to ECS"
+        type: enum
+        enum: ["ECS", "CODE_DEPLOY"]
+        default: "ECS"
+      container-image-name-updates:
+        description: |
+          Use this to update the Docker image names and/or tag names of existing
+          containers that had been defined in the previous task definition.
+          Expected format: container=<container-name>,image-and-tag=<image-name>:<tag-name>|image=<image-name>|tag=<tag-name>,container=...,image-and-tag|image|tag=...,
+          For each container, specify only either "image-and-tag" or "image" or "tag".
+          If "image-and-tag" is specified, the container image will be updated to the value of the name-value pair.
+          If "image" is specified, the image tag defined in the previous task definition will be retained, if exists.
+          If "tag" is specified, the image name defined in the previous task definition will be used.
+        type: string
+        default: ""
+      container-env-var-updates:
+        description: |
+          Use this to update or set the values of environment variables that will be defined for the containers. 
+          (Existing environment variables not included in this parameter will not be removed)
+          Expected format: container=<container-name>,name=<env-var-name>,value=<env-var-value>,container=...,name=...,value=...,
+          Values should not contain commas.
+        type: string
+        default: ""
+      force-new-deployment:
+        description: |
+          Whether to force a new deployment of the service.
+          Not applicable to ECS services that are of the Blue/Green Deployment type.
+        type: boolean
+        default: false
+      verify-revision-is-deployed:
+        description: |
+          Runs the verify-revision-is-deployed Orb command to verify that
+          the revision has been deployed and is the only deployed revision
+          for the service. Note: enabling this may result in the build
+          being marked as failed if tasks for older revisions fail to be stopped
+          before the max number of polling attempts is reached.
+          Does not support ECS services that are of the Blue/Green Deployment type.
+        type: boolean
+        default: false
+      max-poll-attempts:
+        description: |
+          The maximum number of attempts to poll the deployment status before giving up.
+          Only in use when verify-revision-is-deployed is set to true.
+        type: integer
+        default: 50
+      poll-interval:
+        description: |
+          The polling interval, in seconds.
+          Only in use when verify-revision-is-deployed is set to true.
+        type: integer
+        default: 20
+      fail-on-verification-timeout:
+        description: |
+          Whether to exit with an error if the verification of the deployment
+          status does not complete within the number of polling attempts.
+          Only in use when verify-revision-is-deployed is set to true.
+        type: boolean
+        default: true
+      skip-task-definition-registration:
+        description: |
+          Whether to skip registration of a new task definition.
+        type: boolean
+        default: false
+    steps:
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: << parameters.aws-access-key-id >>
+          aws-secret-access-key: << parameters.aws-secret-access-key >>
+          aws-region: << parameters.aws-region >>
+      - update-service:
+          family: << parameters.family >>
+          cluster-name: << parameters.cluster-name >>
+          service-name: << parameters.service-name >>
+          deployment-controller: << parameters.deployment-controller >>
+          codedeploy-application-name: << parameters.codedeploy-application-name >>
+          codedeploy-deployment-group-name: << parameters.codedeploy-deployment-group-name >>
+          codedeploy-load-balanced-container-name: << parameters.codedeploy-load-balanced-container-name >>
+          codedeploy-load-balanced-container-port: << parameters.codedeploy-load-balanced-container-port >>
+          container-image-name-updates: << parameters.container-image-name-updates >>
+          container-env-var-updates: << parameters.container-env-var-updates >>
+          force-new-deployment: << parameters.force-new-deployment >>
+          verify-revision-is-deployed: << parameters.verify-revision-is-deployed >>
+          max-poll-attempts: << parameters.max-poll-attempts >>
+          poll-interval: << parameters.poll-interval >>
+          fail-on-verification-timeout: << parameters.fail-on-verification-timeout >>
+          skip-task-definition-registration: << parameters.skip-task-definition-registration >>
+  update-task-definition:
+    docker:
+      - image: << parameters.docker-image-for-job >>
+    parameters:
+      docker-image-for-job:
+        description:
+          "The docker image to be used for running this job on CircleCI."
+        type: string
+        default: circleci/python:3.7.1
+      aws-access-key-id:
+        description: |
+          AWS access key id for IAM role. Defaulted to $AWS_ACCESS_KEY_ID
+        type: string
+        default: $AWS_ACCESS_KEY_ID
+      aws-secret-access-key:
+        description: |
+          AWS secret key for IAM role. Defaulted to $AWS_SECRET_ACCESS_KEY
+        type: string
+        default: $AWS_SECRET_ACCESS_KEY
+      aws-region:
+        description:
+          AWS region to operate in. Defaulted to $AWS_REGION
+        type: string
+        default: $AWS_REGION
+      family:
+        description:
+          "Name of the task definition's family."
+        type: string
+      container-image-name-updates:
+        description: |
+          Use this to update the Docker image names and/or tag names of existing
+          containers that had been defined in the previous task definition.
+          Expected format: container=<container-name>,image-and-tag=<image-name>:<tag-name>|image=<image-name>|tag=<tag-name>,container=...,image-and-tag|image|tag=...,
+          For each container, specify only either "image-and-tag" or "image" or "tag".
+          If "image-and-tag" is specified, the container image will be updated to the value of the name-value pair.
+          If "image" is specified, the image tag defined in the previous task definition will be retained, if exists.
+          If "tag" is specified, the image name defined in the previous task definition will be used.
+        type: string
+        default: ""
+      container-env-var-updates:
+        description: |
+          Use this to update or set the values of environment variables that will be defined for the containers. 
+          (Existing environment variables not included in this parameter will not be removed)
+          Expected format: container=<container-name>,name=<env-var-name>,value=<env-var-value>,container=...,name=...,value=...,
+          Values should not contain commas.
+        type: string
+        default: ""
+    steps:
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: << parameters.aws-access-key-id >>
+          aws-secret-access-key: << parameters.aws-secret-access-key >>
+          aws-region: << parameters.aws-region >>
+      - update-task-definition:
+          family: << parameters.family >>
+          container-image-name-updates: << parameters.container-image-name-updates >>
+          container-env-var-updates: << parameters.container-env-var-updates >>
   update-task-definition-from-json:
-    description: |
-      Use the AWS CLI and this orb to create a new ECS task definition
-      based upon a local JSON file.
-    usage:
-      version: 2.1
-
-      orbs:
-        aws-cli: circleci/aws-cli@0.1.4
-        aws-ecs: circleci/aws-ecs@1.0.5
-
-      jobs:
-        update-tag:
-          docker:
-            - image: circleci/python:3.7.1
-          steps:
-            - aws-cli/install
-            - aws-cli/configure:
-                aws-access-key-id: "$AWS_ACCESS_KEY_ID"
-                aws-region: "$AWS_REGION"
-            - aws-ecs/update-task-definition-from-json:
-                task-definition-json: "my-app-definition.json"
-  update-service:
-    description: |
-      Use the AWS CLI and this orb to update an ECS service.
-      (Supports both EC2 and Fargate launch types)
-    usage:
-      version: 2.1
-
-      orbs:
-        aws-cli: circleci/aws-cli@0.1.4
-        aws-ecs: circleci/aws-ecs@0.0.10
-
-      jobs:
-        update-tag:
-          docker:
-            - image: circleci/python:3.7.1
-          steps:
-            - aws-cli/install
-            - aws-cli/configure:
-                aws-access-key-id: "$AWS_ACCESS_KEY_ID"
-                aws-region: "$AWS_REGION"
-            - aws-ecs/update-service:
-                family: "${MY_APP_PREFIX}-service"
-                cluster-name: "${MY_APP_PREFIX}-cluster"
-                container-image-name-updates: "container=${MY_APP_PREFIX}-service,tag=stable"
-
-      workflows:
-        deploy:
-          jobs:
-            - update-tag
-
-  verify-revision-deployment:
-    description: Verify the deployment of an ECS revision.
-    usage:
-      version: 2.1
-
-      orbs:
-        aws-cli: circleci/aws-cli@0.1.4
-        aws-ecs: circleci/aws-ecs@0.0.10
-
-      jobs:
-        verify-deployment:
-          docker:
-            - image: circleci/python:3.7.1
-          steps:
-            - aws-cli/install
-            - aws-cli/configure:
-                aws-access-key-id: "$AWS_ACCESS_KEY_ID"
-                aws-region: "$AWS_REGION"
-            - run:
-                name: Get last task definition
-                command: |
-                  TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
-                      --task-definition ${MY_APP_PREFIX}-service \
-                      --output text \
-                      --query 'taskDefinition.taskDefinitionArn')
-                  echo "export TASK_DEFINITION_ARN='${TASK_DEFINITION_ARN}'" >> $BASH_ENV
-            - aws-ecs/verify-revision-is-deployed:
-                family: "${MY_APP_PREFIX}-service"
-                cluster-name: "${MY_APP_PREFIX}-cluster"
-                task-definition-arn: "${TASK_DEFINITION_ARN}"
-
-      workflows:
-        test-workflow:
-          jobs:
-            - verify-deployment
-
-  run-task-fargate:
-    description: Start the run of an ECS task on Fargate.
-    usage:
-      version: 2.1
-
-      orbs:
-        aws-ecs: circleci/aws-ecs@x.y.z
-
-      jobs:
-        run-task:
-          docker:
-            - image: circleci/python:3.7.1
-          steps:
-            - aws-ecs/run-task:
-                cluster: "cluster1"
-                task-definition: "myapp"
-                # e.g. "subnet-70faa93b,subnet-bcc54b93"
-                subnet-ids: $SUBNET_ONE, $SUBNET_TWO
-                # e.g. "sg-010a460f7f442fa75"
-                security-group-ids: $SECURITY_GROUP_IDS
-
-      workflows:
-        run-task:
-          jobs:
-            - run-task
+    docker:
+      - image: << parameters.docker-image-for-job >>
+    parameters:
+      docker-image-for-job:
+        description:
+          "The docker image to be used for running this job on CircleCI."
+        type: string
+        default: circleci/python:3.7.1
+      aws-access-key-id:
+        description: |
+          AWS access key id for IAM role. Defaulted to $AWS_ACCESS_KEY_ID
+        type: string
+        default: $AWS_ACCESS_KEY_ID
+      aws-secret-access-key:
+        description: |
+          AWS secret key for IAM role. Defaulted to $AWS_SECRET_ACCESS_KEY
+        type: string
+        default: $AWS_SECRET_ACCESS_KEY
+      aws-region:
+        description:
+          AWS region to operate in. Defaulted to $AWS_REGION
+        type: string
+        default: $AWS_REGION
+      task-definition-json:
+        description: |
+          Location of your .json task definition file (relative or absolute).
+        type: string
+    steps:
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: << parameters.aws-access-key-id >>
+          aws-secret-access-key: << parameters.aws-secret-access-key >>
+          aws-region: << parameters.aws-region >>
+      - update-task-definition-from-json:
+          task-definition-json: << parameters.task-definition-json >>
+  run-task:
+    docker:
+      - image: << parameters.docker-image-for-job >>
+    parameters:
+      docker-image-for-job:
+        description:
+          "The docker image to be used for running this job on CircleCI."
+        type: string
+        default: circleci/python:3.7.1
+      aws-access-key-id:
+        description: |
+          AWS access key id for IAM role. Defaulted to $AWS_ACCESS_KEY_ID
+        type: string
+        default: $AWS_ACCESS_KEY_ID
+      aws-secret-access-key:
+        description: |
+          AWS secret key for IAM role. Defaulted to $AWS_SECRET_ACCESS_KEY
+        type: string
+        default: $AWS_SECRET_ACCESS_KEY
+      aws-region:
+        description:
+          AWS region to operate in. Defaulted to $AWS_REGION
+        type: string
+        default: $AWS_REGION
+      cluster:
+        description:
+          "The name or ARN of the cluster on which to run the task."
+        type: string
+      task-definition:
+        description: |
+          "The family and revision (family:revision) or full ARN of the task
+          definition to run. If a revision is not specified, the latest ACTIVE
+          revision is used."
+        type: string
+      count:
+        description: |
+          "The number of instantiations of the specified task to place on your
+          cluster. You can specify up to 10 tasks per call."
+        type: integer
+        default: 1
+      started-by:
+        description: |
+          An optional tag specified when a task is started. For example, if
+          you automatically trigger a task to run a batch process job, you
+          could apply a unique identifier for that job to your task with the
+          startedBy parameter. You can then identify which tasks belong to
+          that job by filtering the results of a ListTasks call with the
+          startedBy value. Up to 36 letters (uppercase and lowercase), num-
+          bers, hyphens, and underscores are allowed.
+        type: string
+        default: ""
+      group:
+        description: |
+          The name of the task group to associate with the task.
+          The default value is the family name of the task definition
+          (for example, family:my-family-name).
+        type: string
+        default: ""
+      placement-constraints:
+        description: |
+          "An array of placement constraint objects to use for the task. You
+          can specify up to 10 constraints per task (including constraints in
+          the task definition and those specified at runtime).
+          Expected format: type=string,field=string."
+        type: string
+        default: ""
+      placement-strategy:
+        description: |
+          "The placement strategy objects to use for the task. You can specify
+          a maximum of five strategy rules per task.
+          Expected format: type=string,field=string."
+        type: string
+        default: ""
+      launch-type:
+        description: |
+          The launch type on which to run your task. For more information, see
+          Amazon ECS Launch Types in the Amazon Elastic Container Service
+          Developer Guide. Possible values EC2, FARGATE.
+        type: enum
+        enum: ["FARGATE", "EC2"]
+        default: "FARGATE"
+      platform-version:
+        description: |
+          "The platform version the task should run. A platform version is only
+          specified for tasks using the Fargate launch type."
+        type: string
+        default: "LATEST"
+      awsvpc:
+        description: |
+          "Does your task definition use awsvpc mode or not. If so,
+          this should be true and you should also include subnet-ids
+          and optionally security-group-ids / assign-public-ips."
+        type: boolean
+        default: true
+      subnet-ids:
+        description: |
+          "List of subnet ids separated by commas.
+          Expected Format: subnet-70faa93b,subnet-bcc54b93"
+        type: string
+        default: ""
+      security-group-ids:
+        description: |
+          "List of security group ids separated by commas.
+          Expected Format: sg-010a460f7f442fa75,sg-010a420f7faa5fa75"
+        type: string
+        default: ""
+      assign-public-ip:
+        description: |
+          "Assign a public IP or not"
+        type: enum
+        enum: ["ENABLED", "DISABLED"]
+        default: "DISABLED"
+      overrides:
+        description: |
+          A list of container overrides in JSON format that specify the name of
+          a container in the specified task definition and the overrides it
+          should receive.
+          Double quotes in the JSON should be escaped e.g.:
+          {\\\"containerOverrides\\\":[{\\\"name\\\": \\\"sleep\\\", \\\"memory\\\": 512}]}
+        type: string
+        default: ""
+      tags:
+        description: |
+          "The metadata that you apply to the task to help you categorize and
+          organize them. Each tag consists of a key and an optional value,
+          both of which you define. Expected format: key=string,value=string."
+        type: string
+        default: ""
+      enable-ecs-managed-tags:
+        description: |
+          "Specifies whether to enable Amazon ECS managed tags for the task."
+        type: boolean
+        default: false
+      propagate-tags:
+        description: |
+          "Specifies whether to propagate the tags from the task definition to
+          the task. If no value is specified, the tags are not propagated.
+          Tags can only be propagated to the task during task creation. To add
+          tags to a task after task creation, use the TagResource API action."
+        type: boolean
+        default: false
+    steps:
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-access-key-id: << parameters.aws-access-key-id >>
+          aws-secret-access-key: << parameters.aws-secret-access-key >>
+          aws-region: << parameters.aws-region >>
+      - run-task:
+          cluster: << parameters.cluster >>
+          task-definition: << parameters.task-definition >>
+          count: << parameters.count >>
+          started-by: << parameters.started-by >>
+          group: << parameters.group >>
+          placement-constraints: << parameters.placement-constraints >>
+          placement-strategy: << parameters.placement-strategy >>
+          launch-type: << parameters.launch-type >>
+          platform-version: << parameters.platform-version >>
+          awsvpc: << parameters.awsvpc >>
+          subnet-ids: << parameters.subnet-ids >>
+          security-group-ids: << parameters.security-group-ids >>
+          assign-public-ip: << parameters.assign-public-ip >>
+          overrides: << parameters.overrides >>
+          tags: << parameters.tags >>
+          enable-ecs-managed-tags: << parameters.enable-ecs-managed-tags >>
+          propagate-tags: << parameters.propagate-tags >>
